@@ -48,9 +48,7 @@ def main():
             {
                 "role": "system",
                 "content": (
-                    "Produce a clever crossword title and 30 high quality, humourous crossword words and clues "
-                    "that a viewer of Motherland the UK TV series will find very funny"
-                    #"I want him to learn but not find the puzzle impossible"
+                    "Produce a clever crossword title and 30 high quality, professional, sometimes humourous, crossword words and clues based on the subject.Do not number the clues."
                 ),
             },
             {
@@ -296,17 +294,45 @@ def main():
 
     def number_crossword_squares(puzzle):
         """
-        Consecutive numbers only for squares that start an actual placed word.
-        If two words share the same start cell, they get the same number.
+        Numbers squares according to standard crossword convention:
+        - Numbers increment from left to right, top to bottom
+        - Only number squares that start at least one word
+        - Each square gets only one number, even if it starts both across and down words
         """
         numbering = {}
         next_num = 1
-        for w in puzzle.current_word_list:
-            r0 = w.row - 1
-            c0 = w.col - 1
-            if (r0, c0) not in numbering:
-                numbering[(r0, c0)] = next_num
-                next_num += 1
+        
+        # Scan grid from top to bottom, left to right
+        for r in range(puzzle.rows):
+            for c in range(puzzle.cols):
+                # Skip empty squares
+                if puzzle.grid[r][c] == puzzle.empty:
+                    continue
+                    
+                # Check if this square starts any word
+                starts_word = False
+                
+                # Check if it starts an across word
+                is_across_start = (
+                    # Must have empty square or grid edge to left
+                    (c == 0 or puzzle.grid[r][c-1] == puzzle.empty) and
+                    # Must have at least one letter to right
+                    (c < puzzle.cols-1 and puzzle.grid[r][c+1] != puzzle.empty)
+                )
+                
+                # Check if it starts a down word
+                is_down_start = (
+                    # Must have empty square or grid edge above
+                    (r == 0 or puzzle.grid[r-1][c] == puzzle.empty) and
+                    # Must have at least one letter below
+                    (r < puzzle.rows-1 and puzzle.grid[r+1][c] != puzzle.empty)
+                )
+                
+                # If this square starts either type of word, number it
+                if is_across_start or is_down_start:
+                    numbering[(r, c)] = next_num
+                    next_num += 1
+        
         return numbering
 
     numbering_dict = number_crossword_squares(puzzle)
@@ -349,7 +375,7 @@ def main():
             lines.append(" ".join(current_line))
         return lines
 
-    def create_crossword_pdf(
+    def create_crossword_pdfs(
         puzzle,
         numbering,
         across_clues,
@@ -358,101 +384,97 @@ def main():
     ):
         # Replace spaces with underscores for filename
         safe_title = re.sub(r"\s+", "_", title.strip())
-        # Save PDF in the PDFs directory
-        pdf_filename = os.path.join(pdf_dir, f"{safe_title}.pdf")
+        # Create separate filenames for puzzle and solution
+        puzzle_filename = os.path.join(pdf_dir, f"{safe_title}_puzzle.pdf")
+        solution_filename = os.path.join(pdf_dir, f"{safe_title}_solution.pdf")
 
-        c = canvas.Canvas(pdf_filename, pagesize=landscape(A4))
-        page_width, page_height = landscape(A4)
+        def draw_page(canvas_obj, include_answers=False):
+            page_width, page_height = landscape(A4)
+            left_margin = 50
+            top_margin = page_height - 50
+            text_width = 360
 
-        left_margin = 50
-        top_margin = page_height - 50
-        
-        # 20% more horizontal space for text (original 300 -> 360)
-        text_width = 360
+            # Puzzle title
+            canvas_obj.setFont("Helvetica-Bold", 16)
+            canvas_obj.drawString(left_margin, top_margin, title)
+            if include_answers:
+                canvas_obj.drawString(left_margin + 450, top_margin, "SOLUTION")
 
-        # ========== PAGE 1: The puzzle ==========
+            y_text = top_margin - 30
 
-        # Puzzle title
-        c.setFont("Helvetica-Bold", 16)
-        c.drawString(left_margin, top_margin, title)
+            # ACROSS
+            canvas_obj.setFont("Helvetica-Bold", 12)
+            canvas_obj.drawString(left_margin, y_text, "Across")
+            y_text -= 15
+            canvas_obj.setFont("Helvetica", 8)
+            for num, clue in across_clues:
+                lines = wrap_text(f"{num}. {clue}", max_chars=60)
+                for ln in lines:
+                    canvas_obj.drawString(left_margin, y_text, ln)
+                    y_text -= 10
+                y_text -= 2
 
-        y_text = top_margin - 30
+            y_text -= 8
 
-        # ACROSS
-        c.setFont("Helvetica-Bold", 12)
-        c.drawString(left_margin, y_text, "Across")
-        y_text -= 15
-        # Even smaller font for the clues
-        c.setFont("Helvetica", 8)
-        for num, clue in across_clues:
-            # We'll let lines go to ~55 or 60 chars if we want more width
-            lines = wrap_text(f"{num}. {clue}", max_chars=60)
-            for ln in lines:
-                c.drawString(left_margin, y_text, ln)
-                y_text -= 10
-            y_text -= 2
+            # DOWN
+            canvas_obj.setFont("Helvetica-Bold", 12)
+            canvas_obj.drawString(left_margin, y_text, "Down")
+            y_text -= 15
+            canvas_obj.setFont("Helvetica", 8)
+            for num, clue in down_clues:
+                lines = wrap_text(f"{num}. {clue}", max_chars=60)
+                for ln in lines:
+                    canvas_obj.drawString(left_margin, y_text, ln)
+                    y_text -= 10
+                y_text -= 2
 
-        y_text -= 8
+            # Draw the puzzle grid
+            cell_size = 20
+            puzzle_left = left_margin + text_width - 30  # Reduced by 60 pixels
+            puzzle_top = top_margin - 30  # Moved down
 
-        # DOWN
-        c.setFont("Helvetica-Bold", 12)
-        c.drawString(left_margin, y_text, "Down")
-        y_text -= 15
-        c.setFont("Helvetica", 8)
-        for num, clue in down_clues:
-            lines = wrap_text(f"{num}. {clue}", max_chars=60)
-            for ln in lines:
-                c.drawString(left_margin, y_text, ln)
-                y_text -= 10
-            y_text -= 2
-
-        # Draw the puzzle grid on the right
-        cell_size = 20
-        puzzle_left = left_margin + text_width + 50
-        puzzle_top  = top_margin
-
-        c.setLineWidth(1)
-        for r in range(puzzle.rows):
-            for cc in range(puzzle.cols):
-                if puzzle.grid[r][cc] != puzzle.empty:
+            canvas_obj.setLineWidth(1)
+            for r in range(puzzle.rows):
+                for cc in range(puzzle.cols):
                     x = puzzle_left + cc * cell_size
                     y = puzzle_top - r * cell_size
-                    c.rect(x, y - cell_size, cell_size, cell_size)
-                    if (r, cc) in numbering:
-                        c.setFont("Helvetica", 6)
-                        # Move down from the top boundary
-                        c.drawString(x + 2, (y - cell_size) + 10, str(numbering[(r, cc)]))
+                    
+                    # Draw black squares for empty cells
+                    if puzzle.grid[r][cc] == puzzle.empty:
+                        canvas_obj.setFillColor('black')
+                        canvas_obj.rect(x, y - cell_size, cell_size, cell_size, fill=1)
+                    else:
+                        canvas_obj.setFillColor('white')
+                        canvas_obj.rect(x, y - cell_size, cell_size, cell_size, fill=1)
+                        
+                        # Add numbers if present
+                        if (r, cc) in numbering:
+                            canvas_obj.setFillColor('black')
+                            canvas_obj.setFont("Helvetica", 6)
+                            canvas_obj.drawString(x + 2, (y - cell_size) + 10, str(numbering[(r, cc)]))
+                        
+                        # Add letters if this is the solution page
+                        if include_answers:
+                            canvas_obj.setFillColor('black')
+                            canvas_obj.setFont("Helvetica-Bold", 10)
+                            letter = puzzle.grid[r][cc].upper()
+                            canvas_obj.drawCentredString(x + cell_size/2, (y - cell_size) + cell_size/2 - 2, letter)
 
-        # End first page
-        c.showPage()
+        # Create puzzle PDF
+        c_puzzle = canvas.Canvas(puzzle_filename, pagesize=landscape(A4))
+        draw_page(c_puzzle, include_answers=False)
+        c_puzzle.save()
 
-        # ========== PAGE 2: The solution in uppercase ==========
-        c.setFont("Helvetica-Bold", 16)
-        c.drawString(left_margin, top_margin, f"{title} - Solution")
-        # Move puzzle slightly lower so it doesn't overlap title
-        puzzle_top_sol = top_margin - 60
+        # Create solution PDF
+        c_solution = canvas.Canvas(solution_filename, pagesize=landscape(A4))
+        draw_page(c_solution, include_answers=True)
+        c_solution.save()
 
-        cell_size = 20
-        puzzle_left_sol = left_margin
+        print(f"Crossword puzzle created: {puzzle_filename}")
+        print(f"Solution created: {solution_filename}")
 
-        for r in range(puzzle.rows):
-            for cc in range(puzzle.cols):
-                letter = puzzle.grid[r][cc]
-                if letter != puzzle.empty:
-                    x = puzzle_left_sol + cc * cell_size
-                    y = puzzle_top_sol - r * cell_size
-                    # rectangle
-                    c.rect(x, y - cell_size, cell_size, cell_size)
-                    # uppercase letter in the center
-                    c.setFont("Helvetica-Bold", 10)
-                    c.drawCentredString(x + cell_size/2, (y - cell_size) + cell_size/2 + 3, letter.upper())
-
-        c.showPage()
-        c.save()
-        print(f"Crossword PDF created: {pdf_filename}")
-
-    # Create the PDF
-    create_crossword_pdf(
+    # Update the call to the PDF creation function
+    create_crossword_pdfs(
         puzzle=puzzle,
         numbering=numbering_dict,
         across_clues=across_clues,

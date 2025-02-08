@@ -1,3 +1,13 @@
+"""
+Crossword Puzzle Generator
+-------------------------
+This script generates crossword puzzles from any given subject using OpenAI's API.
+It creates two PDFs: one with the empty puzzle and clues, and another with the solution.
+
+Usage: python main.py "your subject here"
+Example: python main.py "Harry Potter"
+"""
+
 import openai
 from pydantic import BaseModel
 import random
@@ -11,44 +21,62 @@ from dotenv import load_dotenv
 import sys
 import argparse
 
-# Add after imports but before other code
 def parse_args():
+    """
+    Set up command-line argument parsing.
+    Allows users to specify the crossword subject when running the script.
+    
+    Returns:
+        argparse.Namespace: Contains the parsed command-line arguments
+    """
     parser = argparse.ArgumentParser(description='Generate a crossword puzzle from a given subject')
     parser.add_argument('subject', type=str, help='The subject for the crossword puzzle')
     return parser.parse_args()
 
-# Load environment variables from .env file
+# Load API key from .env file
 load_dotenv()
 
-# Create PDFs directory if it doesn't exist
+# Create directory for storing generated PDFs
 pdf_dir = "PDFs"
 os.makedirs(pdf_dir, exist_ok=True)
 
-# ========================================================================
-# 0) OpenAI PROMPT & CROSSWORD FETCH
-# ========================================================================
-
 def main():
+    """
+    Main function that orchestrates the crossword puzzle generation process:
+    1. Gets the subject from command line
+    2. Generates clues and answers using OpenAI
+    3. Creates the crossword grid
+    4. Generates PDFs for the puzzle and solution
+    """
     args = parse_args()
-    PROMPT_SUBJECT = args.subject  # Get subject from command line argument
+    PROMPT_SUBJECT = args.subject
     OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
     openai.api_key = OPENAI_API_KEY
 
     class CrosswordData(BaseModel):
-        """Structure for crossword puzzle data from OpenAI."""
+        """
+        Defines the structure for crossword data received from OpenAI.
+        
+        Attributes:
+            title (str): The title of the crossword puzzle
+            words (list[str]): List of answer words
+            clues (list[str]): List of corresponding clues
+        """
         title: str
         words: list[str] 
         clues: list[str]
 
-    # Make a call to OpenAI
+    # Make API call to OpenAI to generate crossword content
     completion = openai.beta.chat.completions.parse(
         model="gpt-4o",
         messages=[
             {
                 "role": "system",
                 "content": (
-                    "Produce a clever crossword title and 30 high quality, professional, sometimes humourous, crossword words and clues based on the subject.Do not number the clues."
+                    "Produce a clever crossword title and 30 high quality, professional, "
+                    "sometimes humourous, crossword words and clues based on the subject. "
+                    "Do not number the clues."
                 ),
             },
             {
@@ -61,18 +89,25 @@ def main():
 
     event = completion.choices[0].message.parsed
 
-    # Extract the title, words, and clues from the OpenAI response
+    # Extract data from OpenAI response
     puzzle_title = event.title.strip()
     word_data = list(zip(event.words, event.clues))
 
-    # ========================================================================
-    # 1) CROSSWORD CLASSES
-    # ========================================================================
-
     class Word(object):
+        """
+        Represents a single word in the crossword puzzle.
+        
+        Attributes:
+            word (str): The actual word, converted to lowercase with spaces removed
+            clue (str): The corresponding clue for this word
+            length (int): Number of letters in the word
+            row (int): Row position in the grid (set when placed)
+            col (int): Column position in the grid (set when placed)
+            vertical (bool): True if word is placed vertically, False if horizontal
+            number (int): The clue number assigned to this word
+        """
         def __init__(self, word=None, clue=None):
-            # Remove spaces, lower-case
-            self.word = re.sub(r'\s+', '', word.lower())
+            self.word = re.sub(r'\s+', '', word.lower())  # Remove spaces, convert to lowercase
             self.clue = clue
             self.length = len(self.word)
             self.row = None
@@ -81,12 +116,25 @@ def main():
             self.number = None
 
         def down_across(self):
+            """Returns 'down' if word is vertical, 'across' if horizontal"""
             return 'down' if self.vertical else 'across'
 
         def __repr__(self):
             return self.word
 
     class Crossword(object):
+        """
+        Manages the creation and manipulation of the crossword puzzle grid.
+        
+        Attributes:
+            cols (int): Number of columns in the grid
+            rows (int): Number of rows in the grid
+            empty (str): Character used for empty cells
+            maxloops (int): Maximum attempts to place each word
+            available_words (list): Words available for placement
+            current_word_list (list): Words successfully placed in grid
+            grid (list): 2D list representing the puzzle grid
+        """
         def __init__(self, cols, rows, empty='-', maxloops=2000, available_words=[]):
             self.cols = cols
             self.rows = rows
@@ -99,12 +147,19 @@ def main():
             self.debug = 0
 
         def clear_grid(self):
+            """Initialize an empty grid with the specified dimensions"""
             self.grid = []
             for _ in range(self.rows):
                 row = [self.empty]*self.cols
                 self.grid.append(row)
 
         def randomize_word_list(self):
+            """
+            Prepare words for placement:
+            1. Convert to Word objects if needed
+            2. Randomly shuffle the list
+            3. Sort by length (longest first for better fitting)
+            """
             temp_list = []
             for w in self.available_words:
                 if isinstance(w, Word):
@@ -112,11 +167,20 @@ def main():
                 else:
                     temp_list.append(Word(w[0], w[1]))
             random.shuffle(temp_list)
-            # Sort by length descending
             temp_list.sort(key=lambda i: len(i.word), reverse=True)
             self.available_words = temp_list
 
         def compute_crossword(self, time_permitted=1.00, spins=2):
+            """
+            Main algorithm to create the crossword puzzle:
+            1. Makes multiple attempts to place words
+            2. Keeps the best result (most words placed)
+            3. Runs until time limit or all words placed
+            
+            Args:
+                time_permitted (float): Maximum time to spend trying
+                spins (int): Number of placement attempts per iteration
+            """
             copy_x = Crossword(self.cols, self.rows, self.empty, self.maxloops, self.available_words)
 
             count = 0
@@ -134,12 +198,20 @@ def main():
                             copy_x.fit_and_add(w)
                     x += 1
 
+                # Keep the best result so far
                 if len(copy_x.current_word_list) > len(self.current_word_list):
                     self.current_word_list = copy_x.current_word_list
                     self.grid = copy_x.grid
                 count += 1
 
         def suggest_coord(self, word):
+            """
+            Find potential coordinates where a word could be placed.
+            Looks for overlapping letters with already placed words.
+            
+            Returns:
+                list: Possible coordinates sorted by fit score
+            """
             coordlist = []
             glc = -1
             for given_letter in word.word:
@@ -151,23 +223,30 @@ def main():
                     for cell in row:
                         colc += 1
                         if given_letter == cell:
-                            # vertical
+                            # Check vertical placement
                             try:
-                                if rowc - glc > 0:
-                                    if ((rowc - glc) + word.length) <= self.rows:
+                                if rowc - glc > 0:  # Enough space above
+                                    if ((rowc - glc) + word.length) <= self.rows:  # Enough space below
                                         coordlist.append([colc, rowc-glc, 1, 0, 0])
                             except:
                                 pass
-                            # horizontal
+                            # Check horizontal placement
                             try:
-                                if colc - glc > 0:
-                                    if ((colc - glc) + word.length) <= self.cols:
+                                if colc - glc > 0:  # Enough space left
+                                    if ((colc - glc) + word.length) <= self.cols:  # Enough space right
                                         coordlist.append([colc-glc, rowc, 0, 0, 0])
                             except:
                                 pass
             return self.sort_coordlist(coordlist, word)
 
         def sort_coordlist(self, coordlist, word):
+            """
+            Score and sort possible word placements.
+            Higher scores for placements with more letter overlaps.
+            
+            Returns:
+                list: Sorted coordinates with their scores
+            """
             new_coordlist = []
             for coord in coordlist:
                 col, row, vertical = coord[0], coord[1], coord[2]
@@ -180,18 +259,25 @@ def main():
             return new_coordlist
 
         def fit_and_add(self, word):
+            """
+            Attempt to place a word in the grid:
+            1. For first word, place near center
+            2. For subsequent words, try to overlap with existing words
+            3. Check multiple possible positions
+            """
             fit = False
             count = 0
             coordlist = self.suggest_coord(word)
 
             while not fit and count < self.maxloops:
                 if len(self.current_word_list) == 0:
-                    # seed
+                    # First word - place near center
                     vertical, col, row = random.randrange(0,2), 1, 1
                     if self.check_fit_score(col, row, vertical, word):
                         fit = True
                         self.set_word(col, row, vertical, word, force=True)
                 else:
+                    # Try to overlap with existing words
                     try:
                         col, row, vertical = coordlist[count][0], coordlist[count][1], coordlist[count][2]
                     except IndexError:
@@ -202,6 +288,14 @@ def main():
                 count += 1
 
         def check_fit_score(self, col, row, vertical, word):
+            """
+            Check if a word fits at the given position and calculate fit score.
+            Score increases with number of letter overlaps.
+            Also checks surrounding cells to ensure words don't touch inappropriately.
+            
+            Returns:
+                int: Score for the placement (0 if invalid)
+            """
             if col < 1 or row < 1:
                 return 0
             count, score = 1, 1
@@ -215,7 +309,7 @@ def main():
                 if active_cell == letter:
                     score += 1
 
-                # surroundings
+                # Check surrounding cells
                 if vertical:
                     if active_cell != letter:
                         if not self.check_if_cell_clear(col+1, row): return 0
@@ -241,6 +335,10 @@ def main():
             return score
 
         def set_word(self, col, row, vertical, word, force=False):
+            """
+            Place a word in the grid at specified position.
+            Updates both the grid and the word object with position info.
+            """
             if force:
                 word.col = col
                 word.row = row
@@ -254,12 +352,15 @@ def main():
                         col += 1
 
         def set_cell(self, col, row, value):
+            """Set the value of a cell in the grid"""
             self.grid[row-1][col-1] = value
 
         def get_cell(self, col, row):
+            """Get the value of a cell in the grid"""
             return self.grid[row-1][col-1]
 
         def check_if_cell_clear(self, col, row):
+            """Check if a cell is empty and within grid boundaries"""
             try:
                 if self.get_cell(col, row) == self.empty:
                     return True
@@ -268,6 +369,12 @@ def main():
             return False
 
         def solution(self):
+            """
+            Create a string representation of the grid solution.
+            
+            Returns:
+                str: Grid with placed letters and empty cells
+            """
             outStr = ""
             for r in range(self.rows):
                 for c in self.grid[r]:
@@ -275,10 +382,7 @@ def main():
                 outStr += "\n"
             return outStr
 
-    # ========================================================================
-    # 2) BUILD THE PUZZLE
-    # ========================================================================
-
+    # Create the crossword puzzle
     puzzle = Crossword(
         cols=20,
         rows=20,
@@ -287,10 +391,6 @@ def main():
         available_words=word_data
     )
     puzzle.compute_crossword(time_permitted=2)
-
-    # ========================================================================
-    # 3) NUMBER THE WORD STARTS
-    # ========================================================================
 
     def number_crossword_squares(puzzle):
         """
@@ -335,13 +435,14 @@ def main():
         
         return numbering
 
+    # Number the squares and assign numbers to words
     numbering_dict = number_crossword_squares(puzzle)
     for w in puzzle.current_word_list:
         r0 = w.row - 1
         c0 = w.col - 1
         w.number = numbering_dict[(r0, c0)]
 
-    # Separate across vs down
+    # Separate and sort clues into across and down
     across_clues = []
     down_clues = []
     for w in puzzle.current_word_list:
@@ -353,12 +454,18 @@ def main():
     across_clues.sort(key=lambda x: x[0])
     down_clues.sort(key=lambda x: x[0])
 
-    # ========================================================================
-    # 4) CREATE THE TWO-PAGE PDF
-    # ========================================================================
-
     def wrap_text(text, max_chars=52):
-        """Simple word-wrap."""
+        """
+        Simple word-wrapping function for clue text.
+        Ensures lines don't exceed specified width.
+        
+        Args:
+            text (str): Text to wrap
+            max_chars (int): Maximum characters per line
+            
+        Returns:
+            list: Lines of wrapped text
+        """
         words = text.split()
         lines = []
         current_line = []
@@ -382,19 +489,29 @@ def main():
         down_clues,
         title="My Crossword Puzzle"
     ):
-        # Replace spaces with underscores for filename
+        """
+        Create two PDF files:
+        1. The puzzle with empty grid and clues
+        2. The solution with filled grid and clues
+        
+        Both PDFs maintain identical layouts for consistency.
+        """
+        # Create filenames for puzzle and solution PDFs
         safe_title = re.sub(r"\s+", "_", title.strip())
-        # Create separate filenames for puzzle and solution
         puzzle_filename = os.path.join(pdf_dir, f"{safe_title}_puzzle.pdf")
         solution_filename = os.path.join(pdf_dir, f"{safe_title}_solution.pdf")
 
         def draw_page(canvas_obj, include_answers=False):
+            """
+            Helper function to draw a complete puzzle page.
+            Used for both puzzle and solution PDFs to ensure consistent layout.
+            """
             page_width, page_height = landscape(A4)
             left_margin = 50
             top_margin = page_height - 50
             text_width = 360
 
-            # Puzzle title
+            # Draw title
             canvas_obj.setFont("Helvetica-Bold", 16)
             canvas_obj.drawString(left_margin, top_margin, title)
             if include_answers:
@@ -402,7 +519,7 @@ def main():
 
             y_text = top_margin - 30
 
-            # ACROSS
+            # Draw ACROSS clues
             canvas_obj.setFont("Helvetica-Bold", 12)
             canvas_obj.drawString(left_margin, y_text, "Across")
             y_text -= 15
@@ -416,7 +533,7 @@ def main():
 
             y_text -= 8
 
-            # DOWN
+            # Draw DOWN clues
             canvas_obj.setFont("Helvetica-Bold", 12)
             canvas_obj.drawString(left_margin, y_text, "Down")
             y_text -= 15
@@ -473,7 +590,7 @@ def main():
         print(f"Crossword puzzle created: {puzzle_filename}")
         print(f"Solution created: {solution_filename}")
 
-    # Update the call to the PDF creation function
+    # Create the PDFs
     create_crossword_pdfs(
         puzzle=puzzle,
         numbering=numbering_dict,

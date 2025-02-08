@@ -1,0 +1,4 @@
+openai
+pydantic
+reportlab
+python-dotenv 

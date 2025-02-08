@@ -1,4 +1,5 @@
-openai
-pydantic
-reportlab
-python-dotenv 
+openai==1.56.0
+pydantic==2.5.2
+pydantic_core==2.14.5
+python-dotenv==1.0.1
+reportlab==4.2.5
